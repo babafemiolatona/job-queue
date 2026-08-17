@@ -1,0 +1,15 @@
+# Binaries
+/bin/
+
+# Test / coverage output
+/coverage.out
+/coverage.html
+*.test
+
+# Local env / secrets
+.env
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/

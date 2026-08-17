@@ -1,0 +1,44 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    command: ["/usr/local/bin/api"]
+    environment:
+      REDIS_ADDR: redis:6379
+      LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["/usr/local/bin/worker"]
+    environment:
+      REDIS_ADDR: redis:6379
+      LOG_LEVEL: info
+    deploy:
+      replicas: 2
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    command: ["/usr/local/bin/scheduler"]
+    environment:
+      REDIS_ADDR: redis:6379
+      LOG_LEVEL: info
+    depends_on:
+      redis:
+        condition: service_healthy
