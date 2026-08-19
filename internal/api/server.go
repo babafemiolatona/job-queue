@@ -29,6 +29,7 @@ func NewServer(broker *broker.Broker, logger *slog.Logger) *Server {
 	})
 	r.Post("/jobs", s.createJob)
 	r.Get("/jobs/{id}", s.getJob)
+	r.Post("/jobs/{id}/redrive", s.redriveJob)
 	r.Get("/stats", s.getStats)
 	r.Method(http.MethodGet, "/metrics", promhttp.Handler())
 

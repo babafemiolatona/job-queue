@@ -182,3 +182,58 @@ func TestStats(t *testing.T) {
 		t.Error("default queue missing from stats")
 	}
 }
+
+func TestRedriveJob(t *testing.T) {
+	ctx := context.Background()
+	if err := tests.Redis().FlushDB(ctx).Err(); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	b := broker.New(broker.Options{RedisOptions: &redis.Options{Addr: tests.RedisAddr()}})
+	ts := httptest.NewServer(api.NewServer(b, logger).Handler())
+	defer ts.Close()
+	defer b.Close()
+
+	// Create a job, then push it straight into the DLQ.
+	_, out := postJob(t, ts, `{"type":"demo_task","max_retries":1}`)
+	id, _ := out["id"].(string)
+	if id == "" {
+		t.Fatal("no job id returned")
+	}
+	job, err := b.GetJob(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.EnqueueDLQ(ctx, job, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Redrive it through the API.
+	resp, err := http.Post(ts.URL+"/jobs/"+id+"/redrive", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post redrive: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	got, _ := b.GetJob(ctx, id)
+	if got.Status != "pending" {
+		t.Errorf("status = %s, want pending", got.Status)
+	}
+	// The redriven message must be in the stream (plus the original unacked one).
+	if length, _ := tests.Redis().XLen(ctx, "queue:default").Result(); length < 1 {
+		t.Errorf("stream length = %d, want >= 1", length)
+	}
+
+	// Redriving again fails since the job is no longer in the DLQ.
+	resp2, err := http.Post(ts.URL+"/jobs/"+id+"/redrive", "application/json", nil)
+	if err != nil {
+		t.Fatalf("second redrive: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("second redrive status = %d, want 400", resp2.StatusCode)
+	}
+}

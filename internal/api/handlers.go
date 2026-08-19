@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"job-queue/internal/broker"
 	"job-queue/internal/queue"
 	"net/http"
 	"time"
@@ -106,4 +107,28 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) redriveJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.broker.RequeueDLQ(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, redis.Nil):
+			writeError(w, http.StatusNotFound, "job not found")
+		case errors.Is(err, broker.ErrNotInDLQ):
+			writeError(w, http.StatusBadRequest, "job is not in the DLQ")
+		default:
+			s.logger.Error("failed to redrive job", "id", id, "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to redrive job")
+		}
+		return
+	}
+
+	job, err := s.broker.GetJob(r.Context(), id)
+	if err != nil {
+		s.logger.Warn("redriven job missing metadata", "id", id, "err", err)
+		writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": string(queue.StatusPending)})
+		return
+	}
+	writeJSON(w, http.StatusOK, createJobResponse{ID: job.ID, Status: string(job.Status)})
 }

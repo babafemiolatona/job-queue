@@ -20,12 +20,21 @@ type WorkerConfig struct {
 	ProcessedTTL         time.Duration
 }
 
+type SchedulerConfig struct {
+	LockKey       string
+	LockTTL       time.Duration
+	RenewInterval time.Duration
+	TickInterval  time.Duration
+	BatchSize     int64
+}
+
 type Config struct {
 	ServiceName string
 	RedisAddr   string
 	HTTPAddr    string
 	LogLevel    string
 	Worker      WorkerConfig
+	Scheduler   SchedulerConfig
 }
 
 func Load(serviceName string) Config {
@@ -46,6 +55,13 @@ func Load(serviceName string) Config {
 			MinIdle:              getEnvDuration("WORKER_MIN_IDLE", 60*time.Second),
 			ShutdownTimeout:      getEnvDuration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second),
 			ProcessedTTL:         getEnvDuration("WORKER_PROCESSED_TTL", 24*time.Hour),
+		},
+		Scheduler: SchedulerConfig{
+			LockKey:       getEnv("SCHEDULER_LOCK_KEY", "scheduler"),
+			LockTTL:       getEnvDuration("SCHEDULER_LOCK_TTL", 10*time.Second),
+			RenewInterval: getEnvDuration("SCHEDULER_RENEW_INTERVAL", 3*time.Second),
+			TickInterval:  getEnvDuration("SCHEDULER_TICK_INTERVAL", time.Second),
+			BatchSize:     int64(getEnvInt("SCHEDULER_BATCH_SIZE", 100)),
 		},
 	}
 }
@@ -70,6 +86,15 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
 		}
 	}
 	return fallback
