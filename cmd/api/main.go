@@ -13,6 +13,7 @@ import (
 	"job-queue/internal/api"
 	"job-queue/internal/broker"
 	"job-queue/internal/config"
+	"job-queue/internal/metrics"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -37,7 +38,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: api.NewServer(b, logger).Handler(),
+		Handler: api.NewServer(b, logger, metrics.New()).Handler(),
 	}
 
 	go func() {

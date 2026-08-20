@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"job-queue/internal/broker"
+	"job-queue/internal/metrics"
 	"job-queue/internal/queue"
 
 	"github.com/redis/go-redis/v9"
@@ -17,6 +18,7 @@ import (
 type Options struct {
 	Broker               *broker.Broker
 	Logger               *slog.Logger
+	Metrics              *metrics.Metrics
 	Queue                string
 	Consumer             string
 	Concurrency          int
@@ -75,6 +77,9 @@ func New(opts Options) *Worker {
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = metrics.New()
 	}
 
 	return &Worker{
@@ -169,6 +174,7 @@ func (w *Worker) process(m redis.XMessage) {
 		w.logger.Error("failed to mark running", "job_id", id, "err", err)
 	}
 
+	started := time.Now()
 	runErr := w.runWithLease(ctx, job, func() error {
 		h, ok := w.opts.Registry.Lookup(job.Type)
 		if !ok {
@@ -176,6 +182,7 @@ func (w *Worker) process(m redis.XMessage) {
 		}
 		return w.safeHandle(h, job)
 	})
+	w.opts.Metrics.ProcessingTime.WithLabelValues(job.Type).Observe(time.Since(started).Seconds())
 
 	if runErr == nil {
 		if _, err := w.broker.MarkProcessed(ctx, id, w.opts.ProcessedTTL); err != nil {
@@ -184,17 +191,21 @@ func (w *Worker) process(m redis.XMessage) {
 		if err := w.broker.MarkSucceeded(ctx, job); err != nil {
 			w.logger.Error("failed to mark succeeded", "job_id", id, "err", err)
 		}
+		w.opts.Metrics.Succeeded.WithLabelValues(job.Type).Inc()
 		w.logger.Info("job succeeded", "job_id", id, "type", job.Type)
 	} else {
+		w.opts.Metrics.Failed.WithLabelValues(job.Type).Inc()
 		if job.Attempt >= job.MaxRetries {
 			if err := w.broker.EnqueueDLQ(ctx, job, runErr); err != nil {
 				w.logger.Error("failed to enqueue dlq", "job_id", id, "err", err)
 			}
+			w.opts.Metrics.Dead.WithLabelValues(job.Type).Inc()
 			w.logger.Warn("job moved to DLQ", "job_id", id, "type", job.Type, "attempts", job.Attempt+1)
 		} else {
 			if err := w.broker.ScheduleRetry(ctx, job, runErr); err != nil {
 				w.logger.Error("failed to schedule retry", "job_id", id, "err", err)
 			}
+			w.opts.Metrics.Retries.WithLabelValues(job.Type).Inc()
 			w.logger.Warn("job scheduled for retry", "job_id", id, "type", job.Type, "attempt", job.Attempt)
 		}
 	}

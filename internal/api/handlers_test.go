@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
 
 	"job-queue/internal/api"
 	"job-queue/internal/broker"
+	"job-queue/internal/metrics"
 	"job-queue/internal/tests"
 )
 
@@ -28,7 +31,7 @@ func newServer(t *testing.T) *httptest.Server {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	b := broker.New(broker.Options{RedisOptions: &redis.Options{Addr: tests.RedisAddr()}})
-	ts := httptest.NewServer(api.NewServer(b, logger).Handler())
+	ts := httptest.NewServer(api.NewServer(b, logger, metrics.New()).Handler())
 	t.Cleanup(func() {
 		ts.Close()
 		b.Close()
@@ -190,7 +193,7 @@ func TestRedriveJob(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	b := broker.New(broker.Options{RedisOptions: &redis.Options{Addr: tests.RedisAddr()}})
-	ts := httptest.NewServer(api.NewServer(b, logger).Handler())
+	ts := httptest.NewServer(api.NewServer(b, logger, metrics.New()).Handler())
 	defer ts.Close()
 	defer b.Close()
 
@@ -235,5 +238,33 @@ func TestRedriveJob(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusBadRequest {
 		t.Errorf("second redrive status = %d, want 400", resp2.StatusCode)
+	}
+}
+
+func TestMetrics(t *testing.T) {
+	ts := newServer(t)
+
+	postJob(t, ts, `{"type":"demo_task","dedup_key":"m-1"}`)
+	postJob(t, ts, `{"type":"demo_task","dedup_key":"m-1"}`) // dedup, not a new enqueue
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("get /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+
+	if !strings.Contains(text, `jobs_enqueued_total{queue="default"} 1`) {
+		t.Errorf("jobs_enqueued_total missing/incorrect in:\n%s", text)
+	}
+	if !strings.Contains(text, `queue_depth{queue="default"} 1`) {
+		t.Errorf("queue_depth missing in:\n%s", text)
 	}
 }

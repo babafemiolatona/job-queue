@@ -62,8 +62,14 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	case req.RunAfter != nil && req.RunAfter.After(time.Now()):
 		err = s.broker.EnqueueDelayed(r.Context(), job, *req.RunAfter)
 		id = job.ID
+		if err == nil {
+			s.metrics.Enqueued.WithLabelValues(job.Queue).Inc()
+		}
 	default:
 		id, err = s.broker.Enqueue(r.Context(), job)
+		if err == nil && id == job.ID {
+			s.metrics.Enqueued.WithLabelValues(job.Queue).Inc()
+		}
 	}
 
 	if err != nil {

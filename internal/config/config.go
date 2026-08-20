@@ -18,6 +18,7 @@ type WorkerConfig struct {
 	MinIdle              time.Duration
 	ShutdownTimeout      time.Duration
 	ProcessedTTL         time.Duration
+	MetricsAddr          string
 }
 
 type SchedulerConfig struct {
@@ -55,6 +56,7 @@ func Load(serviceName string) Config {
 			MinIdle:              getEnvDuration("WORKER_MIN_IDLE", 60*time.Second),
 			ShutdownTimeout:      getEnvDuration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second),
 			ProcessedTTL:         getEnvDuration("WORKER_PROCESSED_TTL", 24*time.Hour),
+			MetricsAddr:          getEnv("WORKER_METRICS_ADDR", ":8081"),
 		},
 		Scheduler: SchedulerConfig{
 			LockKey:       getEnv("SCHEDULER_LOCK_KEY", "scheduler"),

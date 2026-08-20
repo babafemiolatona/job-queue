@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 
 	"job-queue/internal/broker"
+	"job-queue/internal/metrics"
 	"job-queue/internal/queue"
 	"job-queue/internal/tests"
 	"job-queue/internal/worker"
@@ -351,4 +353,40 @@ func TestWorkerSlowRefreshesLease(t *testing.T) {
 		t.Errorf("lease already expired while job running: %v", job.LeaseUntil)
 	}
 	fmt.Println("lease_until during slow run:", job.LeaseUntil.Format(time.RFC3339Nano))
+}
+
+func TestWorkerInstrumentsMetrics(t *testing.T) {
+	b := newBroker(t, broker.Options{RedisOptions: &redis.Options{Addr: tests.RedisAddr()}})
+	ctx := context.Background()
+	if err := b.EnsureGroup(ctx, "default"); err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New()
+
+	id, err := b.Enqueue(ctx, &queue.Job{
+		Type:       "demo_task",
+		Queue:      "default",
+		Payload:    json.RawMessage(`{"mode":"success"}`),
+		MaxRetries: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startWorker(t, newWorker(t, b, "w-metrics", func(o *worker.Options) { o.Metrics = m }))
+
+	waitFor(t, 5*time.Second, "job succeeded", func() bool {
+		job, err := b.GetJob(ctx, id)
+		return err == nil && job.Status == queue.StatusSucceeded
+	})
+
+	if n := testutil.ToFloat64(m.Succeeded.WithLabelValues("demo_task")); n != 1 {
+		t.Errorf("succeeded = %v, want 1", n)
+	}
+	if n := testutil.ToFloat64(m.Failed.WithLabelValues("demo_task")); n != 0 {
+		t.Errorf("failed = %v, want 0", n)
+	}
+	if n, err := testutil.GatherAndCount(m.Registry, "job_processing_seconds"); err != nil || n < 1 {
+		t.Errorf("histogram samples = %d err=%v, want >= 1", n, err)
+	}
 }

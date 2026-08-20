@@ -2,6 +2,7 @@ package api
 
 import (
 	"job-queue/internal/broker"
+	"job-queue/internal/metrics"
 	"log/slog"
 	"net/http"
 
@@ -11,13 +12,14 @@ import (
 )
 
 type Server struct {
-	broker *broker.Broker
-	logger *slog.Logger
-	router http.Handler
+	broker  *broker.Broker
+	logger  *slog.Logger
+	metrics *metrics.Metrics
+	router  http.Handler
 }
 
-func NewServer(broker *broker.Broker, logger *slog.Logger) *Server {
-	s := &Server{broker: broker, logger: logger}
+func NewServer(broker *broker.Broker, logger *slog.Logger, m *metrics.Metrics) *Server {
+	s := &Server{broker: broker, logger: logger, metrics: m}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -31,7 +33,9 @@ func NewServer(broker *broker.Broker, logger *slog.Logger) *Server {
 	r.Get("/jobs/{id}", s.getJob)
 	r.Post("/jobs/{id}/redrive", s.redriveJob)
 	r.Get("/stats", s.getStats)
-	r.Method(http.MethodGet, "/metrics", promhttp.Handler())
+	r.Method(http.MethodGet, "/metrics", promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{}))
+
+	m.Registry.MustRegister(metrics.NewQueueCollector(s.broker.Stats))
 
 	s.router = r
 	return s

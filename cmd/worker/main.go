@@ -2,15 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"job-queue/internal/broker"
 	"job-queue/internal/config"
+	"job-queue/internal/metrics"
 	"job-queue/internal/worker"
 	"job-queue/internal/worker/handlers"
 )
@@ -36,9 +41,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	m := metrics.New()
+
+	metricsSrv := &http.Server{Addr: cfg.Worker.MetricsAddr, Handler: promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{})}
+
+	go func() {
+		logger.Info("metrics server listening", "addr", cfg.Worker.MetricsAddr)
+
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("metrics server failed", "err", err)
+		}
+	}()
+
 	w := worker.New(worker.Options{
 		Broker:               b,
 		Logger:               logger,
+		Metrics:              m,
 		Queue:                cfg.Worker.Queue,
 		Consumer:             cfg.Worker.Consumer,
 		Concurrency:          cfg.Worker.Concurrency,
@@ -63,5 +81,10 @@ func main() {
 		logger.Error("worker failed", "err", err)
 		os.Exit(1)
 	}
+
+	// Gracefully stop the metrics server before exiting.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = metricsSrv.Shutdown(shutdownCtx)
 	logger.Info("worker stopped")
 }
